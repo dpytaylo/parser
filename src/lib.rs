@@ -1,26 +1,14 @@
-use std::cell::{Cell, Ref, RefMut, RefCell};
+use std::cell::{Cell, RefCell};
 use std::str::Chars;
-
-struct ParserTools<'a> {
-    pos: usize,
-    iter: Chars<'a>,
-    current: char,
-}
-
-impl<'a> ParserTools<'a> {
-    fn new(iter: Chars<'a>, current: char) -> Self {
-        ParserTools {
-            pos: 0,
-            iter,
-            current,
-        }
-    }
-}
 
 pub struct Parser<'a> {
     data: &'a str,
 
-    vars: RefCell<ParserTools<'a>>,
+    iter: RefCell<Chars<'a>>,
+    pos: Cell<usize>,
+
+    current: Cell<char>,
+
     is_end: Cell<bool>,
 }
 
@@ -31,65 +19,56 @@ impl<'a> Parser<'a> {
             Some(current) => {
                 Parser {
                     data,
-                    vars: RefCell::new(ParserTools::new(iter, current)),
+                    iter: RefCell::new(iter),
+                    pos: Cell::new(0),
+
+                    current: Cell::new(current),
                     is_end: Cell::new(false),
                 }
             }
             None => {
                 Parser {
                     data,
-                    vars: RefCell::new(ParserTools::new(iter, ' ')),
+                    iter: RefCell::new(iter),
+                    pos: Cell::new(0),
+
+                    current: Cell::new(' '),
                     is_end: Cell::new(true),
                 }
             }
         }
     }
 
-    fn vars(&self) -> Ref<ParserTools<'a>> {
-        self.vars.borrow()
-    }
-
-    fn mvars(&self) -> RefMut<ParserTools<'a>> {
-        self.vars.borrow_mut()
-    }
-
     fn new_iter(&self, from_pos: usize) {
-        self.mvars().pos = from_pos;
+        self.pos.set(from_pos);
+        *self.iter.borrow_mut() = (&self.data[from_pos..]).chars();
 
-        self.mvars().iter = (&self.data[from_pos..]).chars();
-
-        let curr = self.mvars().iter.next().unwrap_or_else(|| {
+        self.current.set(self.iter.borrow_mut().next().unwrap_or_else(|| {
             self.is_end.set(true);
             ' '
-        }).clone();
-        self.mvars().current = curr;
+        }).clone());
     }
 
     pub fn get_char(&self) -> char {
-        self.vars().current
+        self.current.get()
     }
 
     pub fn get_position(&self) -> usize {
-        self.vars().pos
+        self.pos.get()
     }
 
     pub fn next(&self) -> char {
         if self.is_end.get() {
-            return self.vars().current;
+            return self.current.get()
         }
 
-        self.mvars().pos = {
-            let tmp = self.vars().pos + self.vars().current.len_utf8();
-            tmp
-        };
+        self.pos.set(self.pos.get() + self.current.get().len_utf8());
 
-        let previous = self.vars().current;
-
-        let curr = self.mvars().iter.next().unwrap_or_else(|| {
+        let previous = self.current.get();
+        self.current.set(self.iter.borrow_mut().next().unwrap_or_else(|| {
             self.is_end.set(true);
             ' '
-        });
-        self.mvars().current = curr;
+        }));
 
         previous
     }
@@ -116,45 +95,45 @@ impl<'a> Parser<'a> {
     }
 
     pub fn skip_to_str(&self, break_str: &str) {
-        let start = self.vars().pos;
+        let start = self.pos.get();
 
         while !self.finished() {
-            // Getting slice from start because we can't this: self.vars().pos - break_str.len() (may be invalid utf-8)
-            if (&self.data[start..self.vars().pos]).ends_with(break_str) {
+            // Getting slice from start because we can't this: self.pos.get() - break_str.len() (may be invalid utf-8)
+            if (&self.data[start..self.pos.get()]).ends_with(break_str) {
                 break;
             }
             self.next();
         }
 
-        let end = self.vars().pos - break_str.len();
+        let end = self.pos.get() - break_str.len();
         self.new_iter(end);
     }
 
     pub fn get_word(&self) -> &str {
         self.skip();
 
-        let start = self.vars().pos;
+        let start = self.pos.get();
         while !self.finished() && !self.is_space() {
             self.next();
         }
 
-        &self.data[start..self.vars().pos]
+        &self.data[start..self.pos.get()]
     }
 
     // Returns string without break char
     pub fn get_to_char(&self, break_char: char) -> &str {
-        let start = self.vars().pos;
+        let start = self.pos.get();
 
         while !self.finished() && self.get_char() != break_char {
             self.next();
         }
 
-        &self.data[start..self.vars().pos]
+        &self.data[start..self.pos.get()]
     }
 
     // Returns string without break chars
     pub fn get_to_chars(&self, break_chars: &[char]) -> &str {
-        let start = self.vars().pos;
+        let start = self.pos.get();
 
         'main: while !self.finished() {
             for break_char in break_chars {
@@ -166,21 +145,21 @@ impl<'a> Parser<'a> {
             self.next();
         }
 
-        &self.data[start..self.vars().pos]
+        &self.data[start..self.pos.get()]
     }
 
     // Returns string without break string
     pub fn get_to_str(&self, break_str: &str) -> &str {
-        let start = self.vars().pos;
+        let start = self.pos.get();
 
         while !self.finished() {
-            if (&self.data[start..self.vars().pos]).ends_with(break_str) {
+            if (&self.data[start..self.pos.get()]).ends_with(break_str) {
                 break;
             }
             self.next();
         }
 
-        let end = self.vars().pos - break_str.len();
+        let end = self.pos.get() - break_str.len();
         self.new_iter(end);
 
         &self.data[start..end]
@@ -188,12 +167,12 @@ impl<'a> Parser<'a> {
 
     // Returns string without break strings
     pub fn get_to_strs(&self, break_strs: &[&str]) -> &str {
-        let start = self.vars().pos;
+        let start = self.pos.get();
 
         let mut len = 0;
         'main: while !self.finished() {
             for break_str in break_strs {
-                if (&self.data[start..self.vars().pos]).ends_with(break_str) {
+                if (&self.data[start..self.pos.get()]).ends_with(break_str) {
                     len = break_str.len();
                     break 'main;
                 }
@@ -202,20 +181,20 @@ impl<'a> Parser<'a> {
             self.next();
         }
 
-        let end = self.vars().pos - len;
+        let end = self.pos.get() - len;
         self.new_iter(end);
 
         &self.data[start..end]
     }
 
     pub fn get_to_end(&self) -> &str {
-        let start = self.vars().pos;
+        let start = self.pos.get();
 
         while !self.finished() {
             self.next();
         }
 
-        &self.data[start..self.vars().pos]
+        &self.data[start..self.pos.get()]
     }
 }
 
