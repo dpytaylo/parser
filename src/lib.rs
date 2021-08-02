@@ -198,7 +198,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-
+// Old version
 // use std::slice::Iter;
 
 // pub struct Parser<'a> {
